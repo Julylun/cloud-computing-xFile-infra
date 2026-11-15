@@ -1,0 +1,148 @@
+name: Reusable CI Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+        description: "Tên service (vd: backend, frontend)"
+      dockerfile-path:
+        required: false
+        type: string
+        default: "./Dockerfile"
+        description: "Đường dẫn tới Dockerfile"
+      context-path:
+        required: false
+        type: string
+        default: "."
+        description: "Docker build context"
+      lint-command:
+        required: false
+        type: string
+        default: "npm run lint"
+        description: "Lệnh chạy Lint"
+      test-command:
+        required: false
+        type: string
+        default: "npm test"
+        description: "Lệnh chạy Automated Test"
+      node-version:
+        required: false
+        type: string
+        default: "22"
+        description: "Node.js version"
+    secrets:
+      INFRA_DISPATCH_TOKEN:
+        required: false
+        description: "GitHub PAT để bắn repository_dispatch sang repo cloud-computing-xFile-infra"
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  lint-and-test:
+    name: 1. Lint & Test (${{ inputs.service-name }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Lint & Syntax Check
+        run: ${{ inputs.lint-command }}
+
+      - name: Run Automated Tests
+        run: ${{ inputs.test-command }}
+
+  build-scan-push:
+    name: 2. Build, Scan & Push (${{ inputs.service-name }})
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    outputs:
+      image-name: ${{ steps.prep.outputs.image_name }}
+      short-sha: ${{ steps.prep.outputs.short_sha }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Prepare Image Name & Metadata
+        id: prep
+        run: |
+          LOWER_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${LOWER_REPO}"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "image_name=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "TAG_SHA=${IMAGE}:sha-${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "TAG_LATEST=${IMAGE}:latest" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Load Docker Image for Scanning
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: ${{ inputs.context-path }}
+          file: ${{ inputs.dockerfile-path }}
+          load: true
+          tags: |
+            ${{ env.TAG_SHA }}
+            ${{ env.TAG_LATEST }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Aqua Security Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          image-ref: ${{ env.TAG_SHA }}
+          format: "table"
+          exit-code: "0" # Ghi nhận và cảnh báo CVE mà không chặn build ngoại trừ chính sách yêu cầu
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+
+      - name: Push Docker Image to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: ${{ inputs.context-path }}
+          file: ${{ inputs.dockerfile-path }}
+          push: true
+          tags: |
+            ${{ env.TAG_SHA }}
+            ${{ env.TAG_LATEST }}
+          cache-from: type=gha
+
+      - name: Dispatch CD trigger to Infra Repo
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.INFRA_DISPATCH_TOKEN != ''
+        uses: peter-evans/repository-dispatch@ff4505510f45068325f696464573033ea680d9cf # v3.0.0
+        with:
+          token: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+          repository: Julylun/cloud-computing-xFile-infra
+          event-type: deploy-service
+          client-payload: >-
+            {
+              "service": "${{ inputs.service-name }}",
+              "tag": "sha-${{ steps.prep.outputs.short_sha }}",
+              "commit": "${{ github.sha }}",
+              "actor": "${{ github.actor }}"
+            }

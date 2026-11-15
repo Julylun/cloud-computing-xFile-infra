@@ -1,0 +1,79 @@
+name: Continuous Deployment (CD)
+
+on:
+  repository_dispatch:
+    types: [deploy-service]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service cần triển khai (backend, frontend, all)"
+        required: true
+        type: choice
+        options:
+          - backend
+          - frontend
+          - all
+        default: backend
+      tag:
+        description: "Image tag cần deploy (ví dụ: sha-abc1234 hoặc latest)"
+        required: false
+        type: string
+        default: latest
+      action:
+        description: "Hành động thực thi (deploy hoặc rollback)"
+        required: true
+        type: choice
+        options:
+          - deploy
+          - rollback
+        default: deploy
+
+concurrency:
+  group: production-deploy-${{ github.event.client_payload.service || inputs.service }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Self-Hosted VPS
+    runs-on: self-hosted
+    steps:
+      - name: Checkout Infra Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Determine Deployment Variables
+        id: vars
+        run: |
+          SERVICE="${{ github.event.client_payload.service || inputs.service }}"
+          TAG="${{ github.event.client_payload.tag || inputs.tag }}"
+          ACTION="${{ inputs.action || 'deploy' }}"
+          echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "action=${ACTION}" >> "$GITHUB_OUTPUT"
+          echo "Triển khai service: ${SERVICE} với tag: ${TAG} (Hành động: ${ACTION})"
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Ensure Scripts are Executable
+        run: |
+          chmod +x ./scripts/*.sh
+
+      - name: Execute Deployment or Rollback
+        run: |
+          SERVICE="${{ steps.vars.outputs.service }}"
+          TAG="${{ steps.vars.outputs.tag }}"
+          ACTION="${{ steps.vars.outputs.action }}"
+
+          if [ "$ACTION" = "rollback" ]; then
+            echo "Bắt đầu khôi phục rollback cho service: $SERVICE về tag: $TAG"
+            ./scripts/rollback.sh "$SERVICE" "$TAG"
+          else
+            echo "Bắt đầu triển khai rolling update cho service: $SERVICE với tag: $TAG"
+            ./scripts/deploy.sh "$SERVICE" "$TAG"
+          fi
+
+      - name: Verify Overall System Health
+        run: |
+          echo "Kiểm tra trạng thái các container sau cập nhật:"
+          docker compose ps
