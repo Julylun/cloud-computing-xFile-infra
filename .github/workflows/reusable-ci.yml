@@ -133,7 +133,9 @@ jobs:
           cache-from: type=gha
 
       - name: Dispatch CD trigger to Infra Repo
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.INFRA_DISPATCH_TOKEN != ''
+        env:
+          INFRA_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.INFRA_TOKEN != ''
         uses: peter-evans/repository-dispatch@ff4505510f45068325f696464573033ea680d9cf # v3.0.0
         with:
           token: ${{ secrets.INFRA_DISPATCH_TOKEN }}

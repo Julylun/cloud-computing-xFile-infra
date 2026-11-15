@@ -51,6 +51,10 @@ services:
       - "traefik.http.routers.backend.middlewares=backend-compress,backend-headers"
       - "traefik.http.middlewares.backend-compress.compress=true"
       - "traefik.http.middlewares.backend-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+      - "traefik.http.middlewares.backend-headers.headers.accesscontrolallowmethods=GET,POST,PUT,PATCH,DELETE,OPTIONS"
+      - "traefik.http.middlewares.backend-headers.headers.accesscontrolalloworiginlist=https://xFile.julylun.io.vn,https://xfile.julylun.io.vn"
+      - "traefik.http.middlewares.backend-headers.headers.accesscontrolallowheaders=*"
+      - "traefik.http.middlewares.backend-headers.headers.accesscontrolallowcredentials=true"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
       interval: 15s

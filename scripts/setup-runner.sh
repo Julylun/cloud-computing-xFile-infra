@@ -67,6 +67,8 @@ echo "⚙️ Configuring runner with GitHub..."
   --replace
 
 echo "🚀 Installing runner as systemd service..."
+sudo ./svc.sh stop || true
+sudo ./svc.sh uninstall || true
 sudo ./svc.sh install "$USER"
 sudo ./svc.sh start
 sudo ./svc.sh status

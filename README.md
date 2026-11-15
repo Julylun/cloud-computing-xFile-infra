@@ -135,6 +135,10 @@ Tại repo `cloud-computing-xFile-backend` và `cloud-computing-xFile-frontend`:
 - Vào `Settings -> Secrets and variables -> Actions`.
 - Thêm secret `INFRA_DISPATCH_TOKEN`: Chứa Personal Access Token (PAT) có quyền `repo` hoặc `actions:write` trên repo `cloud-computing-xFile-infra`.
 
+### 6.3. Quyền hạn kéo container image từ GHCR (`GHCR_PAT`)
+- Nếu các package trên GitHub Container Registry (GHCR) là Private giữa các repo cá nhân: Thêm secret `GHCR_PAT` (PAT có quyền `read:packages`) tại repo `cloud-computing-xFile-infra`.
+- Nếu package là Public hoặc đã cấp quyền trong *Package Settings -> Actions access*, workflow sẽ tự động dùng `GITHUB_TOKEN`.
+
 ---
 
 ## 7. Triển khai cuốn chiếu & Quy trình Rollback

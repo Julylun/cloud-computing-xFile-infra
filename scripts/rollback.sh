@@ -35,6 +35,15 @@ else
   echo "${VAR_NAME}=${TAG}" >> .env
 fi
 
+# Update state file to reflect current rolled-back version
+if [ -f "$STATE_FILE" ]; then
+  if grep -q "^${VAR_NAME}=" "$STATE_FILE"; then
+    sed -i "s|^${VAR_NAME}=.*|${VAR_NAME}=${TAG}|" "$STATE_FILE"
+  else
+    echo "${VAR_NAME}=${TAG}" >> "$STATE_FILE"
+  fi
+fi
+
 echo "📥 Pulling rollback image ${SERVICE}:${TAG}..."
 docker compose pull "$SERVICE" || true
 

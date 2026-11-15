@@ -1,0 +1,16 @@
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Traefik ACME Let's Encrypt certificates & private keys
+traefik/acme.json
+
+# Deployment state tracking
+.deploy_state*
+
+# OS & Editor temporary files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp

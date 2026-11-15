@@ -29,22 +29,28 @@ fi
 # Create state file if not existing
 touch "${STATE_FILE}"
 
-# Function to record previous state for rollback
-save_previous_tag() {
-  local svc="$1"
-  local current_tag
-  current_tag=$(grep "^${svc^^}_TAG=" "${STATE_FILE}" 2>/dev/null | cut -d'=' -f2 || echo "")
-  if [ -z "$current_tag" ]; then
-    current_tag="latest"
-  fi
-  echo "PREV_${svc^^}_TAG=${current_tag}" >> "${STATE_FILE}.tmp"
-}
-
 # Function to update tag in .env & state file
 update_env_tag() {
   local svc="$1"
   local new_tag="$2"
   local var_name="${svc^^}_TAG"
+
+  # Find current active tag before overwrite
+  local prev_tag
+  prev_tag=$(grep "^${var_name}=" "${STATE_FILE}" 2>/dev/null | cut -d'=' -f2 || true)
+  if [ -z "$prev_tag" ]; then
+    prev_tag=$(grep "^${var_name}=" .env 2>/dev/null | cut -d'=' -f2 || echo "latest")
+  fi
+  if [ -z "$prev_tag" ]; then
+    prev_tag="latest"
+  fi
+
+  # Record previous tag in state file for rollback
+  if grep -q "^PREV_${var_name}=" "${STATE_FILE}"; then
+    sed -i "s|^PREV_${var_name}=.*|PREV_${var_name}=${prev_tag}|" "${STATE_FILE}"
+  else
+    echo "PREV_${var_name}=${prev_tag}" >> "${STATE_FILE}"
+  fi
 
   # Update or append in .env
   if grep -q "^${var_name}=" .env; then
@@ -71,6 +77,16 @@ verify_health() {
   echo "🩺 Checking health of ${container_name}..."
 
   while [ $attempt -le $max_attempts ]; do
+    local container_state
+    container_state=$(docker inspect --format='{{.State.Status}}' "${container_name}" 2>/dev/null || echo "not_found")
+
+    if [ "$container_state" = "exited" ] || [ "$container_state" = "dead" ]; then
+      echo "❌ Container ${container_name} has crashed (status: ${container_state})!"
+      echo "📋 Recent container logs:"
+      docker logs --tail 20 "${container_name}" 2>&1 || true
+      return 1
+    fi
+
     local health_status
     health_status=$(docker inspect --format='{{json .State.Health.Status}}' "${container_name}" 2>/dev/null || echo "not_found")
     health_status=$(echo "${health_status}" | tr -d '"')
@@ -80,15 +96,19 @@ verify_health() {
       return 0
     elif [ "$health_status" = "unhealthy" ]; then
       echo "❌ Container ${container_name} reported UNHEALTHY!"
+      echo "📋 Recent container logs:"
+      docker logs --tail 20 "${container_name}" 2>&1 || true
       return 1
     fi
 
-    echo "⏳ Waiting for healthcheck (${attempt}/${max_attempts}, status: ${health_status})..."
+    echo "⏳ Waiting for healthcheck (${attempt}/${max_attempts}, status: ${health_status}, state: ${container_state})..."
     sleep 2
     attempt=$((attempt + 1))
   done
 
   echo "❌ Timeout waiting for ${container_name} to become healthy."
+  echo "📋 Recent container logs:"
+  docker logs --tail 20 "${container_name}" 2>&1 || true
   return 1
 }
 
@@ -101,13 +121,20 @@ deploy_single_service() {
   echo "--------------------------------------------------"
 
   # Save previous tag
+  local var_name="${svc^^}_TAG"
   local prev_tag
-  prev_tag=$(grep "^${svc^^}_TAG=" "${STATE_FILE}" 2>/dev/null | cut -d'=' -f2 || echo "latest")
+  prev_tag=$(grep "^${var_name}=" "${STATE_FILE}" 2>/dev/null | cut -d'=' -f2 || true)
+  if [ -z "$prev_tag" ]; then
+    prev_tag=$(grep "^${var_name}=" .env 2>/dev/null | cut -d'=' -f2 || echo "latest")
+  fi
+  if [ -z "$prev_tag" ]; then
+    prev_tag="latest"
+  fi
 
   update_env_tag "$svc" "$tag"
 
   echo "📥 Pulling latest image..."
-  docker compose pull "$svc"
+  docker compose pull "$svc" || true
 
   echo "🔄 Recreating container with zero downtime..."
   docker compose up -d --no-deps "$svc"
@@ -130,8 +157,11 @@ fi
 # Ensure Traefik is running
 if [ -z "$(docker compose ps -q traefik 2>/dev/null)" ]; then
   echo "🚦 Starting Traefik Reverse Proxy..."
-  # Ensure letsencrypt acme.json has chmod 600
+  # Ensure letsencrypt acme.json has chmod 600 and is not a directory
   mkdir -p ./traefik
+  if [ -d ./traefik/acme.json ]; then
+    rm -rf ./traefik/acme.json
+  fi
   touch ./traefik/acme.json
   chmod 600 ./traefik/acme.json || true
   docker compose up -d traefik
